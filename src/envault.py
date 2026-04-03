@@ -13,22 +13,27 @@ import subprocess
 import tarfile
 import shutil
 import requests
+import hashlib
+import logging
+import time
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, List, Any
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List, Any, Tuple
+from functools import wraps
 import yaml
 
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "envault"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.yaml"
 DEFAULT_BACKUP_DIR = Path.home() / ".envault"
 DEFAULT_OPENCLAW_DIR = Path.home() / ".openclaw"
 DEFAULT_RESTIC_REPO = DEFAULT_BACKUP_DIR / "restic"
+DEFAULT_LOG_DIR = DEFAULT_BACKUP_DIR / "logs"
+DEFAULT_LOG_FILE = DEFAULT_LOG_DIR / "envault.log"
 
 SUPPORTED_FORMATS = ["tar.gz", "tar.bz2", "tar.xz", "tar", "zip", "tar.xz"]
-ENCRYPTION_EXTENSIONS = [".gpg", ".enc"]
 
 CATBOX_URL = "https://catbox.moe/user/api.php"
 TMPFILES_URL = "https://tmpfiles.org/api/v1/upload"
@@ -60,6 +65,11 @@ class I18n:
             "excluded_files": "Excluded {} files matching rules",
             "compression_format": "Using compression format: {}",
             "unknown_command": "Unknown command",
+            "backup_verified": "Backup verified: {}",
+            "verification_failed": "Verification failed: {}",
+            "incremental_backup": "Incremental backup: {} changes",
+            "cleanup_complete": "Cleanup complete: removed {} files",
+            "rotate_log": "Log rotated: {} bytes archived",
         },
         "zh": {
             "start_backup": "开始备份流程...",
@@ -74,6 +84,11 @@ class I18n:
             "excluded_files": "已排除 {} 个匹配规则的文件",
             "compression_format": "使用压缩格式: {}",
             "unknown_command": "未知命令",
+            "backup_verified": "备份已校验: {}",
+            "verification_failed": "校验失败: {}",
+            "incremental_backup": "增量备份: {} 个变化",
+            "cleanup_complete": "清理完成: 删除 {} 个文件",
+            "rotate_log": "日志轮转: {} 字节已归档",
         },
         "es": {
             "start_backup": "Iniciando proceso de respaldo...",
@@ -88,6 +103,11 @@ class I18n:
             "excluded_files": "Excluidos {} archivos que coinciden con las reglas",
             "compression_format": "Usando formato de compresión: {}",
             "unknown_command": "Comando desconocido",
+            "backup_verified": "Respaldo verificado: {}",
+            "verification_failed": "Verificación fallida: {}",
+            "incremental_backup": "Respaldo incremental: {} cambios",
+            "cleanup_complete": "Limpieza completa: {} archivos eliminados",
+            "rotate_log": "Log rotado: {} bytes archivados",
         }
     }
 
@@ -105,7 +125,18 @@ i18n = I18n(os.environ.get("ENVAULT_LANG", "en"))
 
 
 def log(msg: str, color: str = Colors.GREEN):
-    print(f"{color}[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]{Colors.NC} {msg}")
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"{color}[{timestamp}]{Colors.NC} {msg}")
+    log_to_file(msg)
+
+
+def log_to_file(msg: str):
+    try:
+        if DEFAULT_LOG_FILE.parent.exists():
+            with open(DEFAULT_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+    except Exception:
+        pass
 
 
 def warn(msg: str):
@@ -121,7 +152,7 @@ def info(msg: str):
 
 
 def check_deps() -> bool:
-    deps = {"tar": "tar", "curl": "curl", "gpg": "gpg"}
+    deps = {"tar": "tar", "curl": "curl", "openssl": "openssl"}
     missing = []
     for cmd, name in deps.items():
         if not shutil.which(cmd):
@@ -134,8 +165,24 @@ def check_deps() -> bool:
 def init_dirs():
     DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    (DEFAULT_BACKUP_DIR / "logs").mkdir(parents=True, exist_ok=True)
+    DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
     (DEFAULT_RESTIC_REPO).mkdir(parents=True, exist_ok=True)
+
+
+def rotate_log_if_needed(max_size_mb: int = 10):
+    try:
+        if not DEFAULT_LOG_FILE.exists():
+            return
+        size_mb = DEFAULT_LOG_FILE.stat().st_size / (1024 * 1024)
+        if size_mb > max_size_mb:
+            archive_name = f"envault-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+            archive_path = DEFAULT_LOG_DIR / archive_name
+            shutil.move(str(DEFAULT_LOG_FILE), str(archive_path))
+            info(i18n("rotate_log", int(size_mb * 1024 * 1024)))
+            with open(DEFAULT_LOG_FILE, "w", encoding="utf-8") as f:
+                pass
+    except Exception as e:
+        warn(f"Log rotation failed: {e}")
 
 
 def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Dict[str, Any]:
@@ -168,7 +215,8 @@ def get_default_config() -> Dict[str, Any]:
         "compression": "tar.gz",
         "encryption": {
             "enabled": False,
-            "recipient": None
+            "method": "openssl",
+            "password": None
         },
         "cloud_upload": {
             "catbox": True,
@@ -179,6 +227,23 @@ def get_default_config() -> Dict[str, Any]:
         "restic": {
             "enabled": True,
             "keep_last": 10
+        },
+        "cleanup": {
+            "enabled": False,
+            "keep_days": 7,
+            "keep_count": 10
+        },
+        "incremental": {
+            "enabled": False,
+            "manifest_file": ".envault-manifest.json"
+        },
+        "verify": {
+            "enabled": True,
+            "algorithm": "sha256"
+        },
+        "log": {
+            "max_size_mb": 10,
+            "rotate": True
         },
         "language": "en"
     }
@@ -205,11 +270,102 @@ def match_exclude(path: Path, patterns: List[str]) -> bool:
     return False
 
 
+def get_file_hash(file_path: Path, algorithm: str = "sha256") -> str:
+    hash_func = hashlib.new(algorithm)
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hash_func.update(chunk)
+    return hash_func.hexdigest()
+
+
+def verify_archive(archive_path: Path, algorithm: str = "sha256") -> Tuple[bool, str]:
+    manifest_path = archive_path.with_suffix(f"{archive_path.suffix}.{algorithm}")
+    if not manifest_path.exists():
+        return False, "Manifest not found"
+
+    try:
+        expected_hash = manifest_path.read_text().strip()
+        actual_hash = get_file_hash(archive_path, algorithm)
+        if expected_hash == actual_hash:
+            return True, f"{algorithm}:{actual_hash}"
+        return False, f"Hash mismatch: expected {expected_hash}, got {actual_hash}"
+    except Exception as e:
+        return False, str(e)
+
+
+def create_checksum(archive_path: Path, algorithm: str = "sha256") -> Path:
+    hash_value = get_file_hash(archive_path, algorithm)
+    manifest_path = archive_path.with_suffix(f"{archive_path.suffix}.{algorithm}")
+    manifest_path.write_text(hash_value)
+    return manifest_path
+
+
+def load_manifest(manifest_path: Path) -> Dict[str, Any]:
+    if not manifest_path.exists():
+        return {}
+    try:
+        return json.loads(manifest_path.read_text())
+    except Exception:
+        return {}
+
+
+def save_manifest(manifest_path: Path, data: Dict[str, Any]):
+    manifest_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def get_file_mtime_size(path: Path) -> Tuple[float, int]:
+    try:
+        stat = path.stat()
+        return stat.st_mtime, stat.st_size
+    except Exception:
+        return 0, 0
+
+
+def find_changed_files(
+    source_dir: Path,
+    manifest: Dict[str, Any],
+    exclude_patterns: List[str]
+) -> List[Path]:
+    changed = []
+    source_key = str(source_dir)
+
+    if source_key not in manifest:
+        manifest[source_key] = {}
+
+    manifest_dir = manifest[source_key]
+
+    for item in source_dir.rglob("*"):
+        if match_exclude(item, exclude_patterns):
+            continue
+
+        rel_path = str(item.relative_to(source_dir))
+        mtime, size = get_file_mtime_size(item)
+
+        if item.is_dir():
+            continue
+
+        if rel_path not in manifest_dir:
+            changed.append(item)
+        else:
+            old_mtime, old_size = manifest_dir[rel_path]
+            if mtime > old_mtime or size != old_size:
+                changed.append(item)
+
+    for rel_path in list(manifest_dir.keys()):
+        full_path = source_dir / rel_path
+        if not full_path.exists():
+            del manifest_dir[rel_path]
+
+    return changed
+
+
 def create_backup_with_excludes(
     source_dirs: List[Dict[str, str]],
     exclude_patterns: List[str],
     compression: str = "tar.gz",
-    output_name: str = "backup"
+    output_name: str = "backup",
+    incremental: bool = False,
+    verify: bool = True
 ) -> Optional[Path]:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_file = DEFAULT_BACKUP_DIR / f"{output_name}-{timestamp}.{compression}"
@@ -220,6 +376,10 @@ def create_backup_with_excludes(
     temp_dir = DEFAULT_BACKUP_DIR / f"temp_{timestamp}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
+    changed_count = 0
+    manifest_path = DEFAULT_BACKUP_DIR / ".file-manifest.json"
+    manifest = load_manifest(manifest_path)
+
     try:
         for source in source_dirs:
             source_path = Path(source["path"])
@@ -227,25 +387,56 @@ def create_backup_with_excludes(
                 warn(f"Source not found: {source_path}")
                 continue
 
-            dest_dir = temp_dir / source.get("name", source_path.name)
-            dest_dir.mkdir(parents=True, exist_ok=True)
+            if incremental:
+                changed_files = find_changed_files(source_path, manifest, exclude_patterns)
+                changed_count += len(changed_files)
 
-            for item in source_path.rglob("*"):
-                if match_exclude(item, exclude_patterns):
-                    excluded_count += 1
-                    continue
+                if not changed_files:
+                    info("No changes detected, skipping backup")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return None
 
-                rel_path = item.relative_to(source_path)
-                dest_path = dest_dir / rel_path
+                dest_dir = temp_dir / source.get("name", source_path.name)
+                dest_dir.mkdir(parents=True, exist_ok=True)
 
-                if item.is_dir():
-                    dest_path.mkdir(parents=True, exist_ok=True)
-                else:
+                for item in changed_files:
+                    rel_path = item.relative_to(source_path)
+                    dest_path = dest_dir / rel_path
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(item, dest_path)
 
+                    mtime, size = get_file_mtime_size(item)
+                    manifest[str(source_path)][str(rel_path)] = (mtime, size)
+            else:
+                dest_dir = temp_dir / source.get("name", source_path.name)
+                dest_dir.mkdir(parents=True, exist_ok=True)
+
+                for item in source_path.rglob("*"):
+                    if match_exclude(item, exclude_patterns):
+                        excluded_count += 1
+                        continue
+
+                    rel_path = item.relative_to(source_path)
+                    dest_path = dest_dir / rel_path
+
+                    if item.is_dir():
+                        dest_path.mkdir(parents=True, exist_ok=True)
+                    else:
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, dest_path)
+
+                        if incremental:
+                            mtime, size = get_file_mtime_size(item)
+                            manifest.setdefault(str(source_path), {})[str(rel_path)] = (mtime, size)
+
         if excluded_count > 0:
             info(i18n("excluded_files", excluded_count))
+
+        if incremental and changed_count > 0:
+            info(i18n("incremental_backup", changed_count))
+
+        if incremental:
+            save_manifest(manifest_path, manifest)
 
         if compression == "zip":
             shutil.make_archive(
@@ -254,10 +445,17 @@ def create_backup_with_excludes(
                 temp_dir
             )
         else:
-            with tarfile.open(backup_file, f"w:{compression.split('.')[-1]}" if "." in compression else "w") as tar:
+            ext = compression.split('.')[-1] if '.' in compression else "gz"
+            mode = f"w:{ext}"
+            with tarfile.open(backup_file, mode) as tar:
                 tar.add(temp_dir, arcname=".")
 
         log(i18n("backup_created", backup_file))
+
+        if verify:
+            checksum_file = create_checksum(backup_file, "sha256")
+            info(i18n("backup_verified", checksum_file.name))
+
         return backup_file
 
     except Exception as e:
@@ -267,26 +465,32 @@ def create_backup_with_excludes(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def encrypt_file(input_file: Path, recipient: str = None) -> Optional[Path]:
-    output_file = input_file.with_suffix(input_file.suffix + ".gpg")
+def encrypt_file_openssl(input_file: Path, password: str = None) -> Optional[Path]:
+    if not password:
+        password = os.environ.get("ENVAULT_PASSWORD", "")
 
-    cmd = ["gpg", "--batch", "--yes", "--compress-algo", "none"]
+    output_file = input_file.with_suffix(input_file.suffix + ".enc")
 
-    if recipient:
-        cmd.extend(["--recipient", recipient])
-    else:
-        cmd.append("--symmetric")
+    cmd = [
+        "openssl", "enc", "-aes-256-cbc",
+        "-salt",
+        "-pbkdf2",
+        "-iter", "100000",
+        "-out", str(output_file),
+        "-in", str(input_file)
+    ]
 
-    cmd.extend(["--output", str(output_file), str(input_file)])
+    if password:
+        cmd.extend(["-pass", f"pass:{password}"])
 
     try:
-        env = os.environ.copy()
-        if os.environ.get("GPG_PASSWORD"):
-            env["GPG_PASSWORD"] = os.environ["GPG_PASSWORD"]
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             info(i18n("encryption_enabled"))
             input_file.unlink()
+            checksum = input_file.with_suffix(input_file.suffix + ".enc.sha256")
+            if checksum.exists():
+                checksum.unlink()
             return output_file
         else:
             error(f"Encryption failed: {result.stderr}")
@@ -296,26 +500,58 @@ def encrypt_file(input_file: Path, recipient: str = None) -> Optional[Path]:
         return None
 
 
-def decrypt_file(input_file: Path, output_dir: Path = None) -> Optional[Path]:
+def decrypt_file_openssl(input_file: Path, password: str = None, output_dir: Path = None) -> Optional[Path]:
+    if not password:
+        password = os.environ.get("ENVAULT_PASSWORD", "")
+
     if output_dir is None:
         output_dir = Path.home()
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_stem = input_file.stem.replace(".enc", "")
+    output_file = output_dir / output_stem
+
     cmd = [
-        "gpg", "--batch", "--yes", "--decrypt",
-        "--output", str(output_dir / input_file.stem.replace(".gpg", "").replace(".enc", "")),
-        str(input_file)
+        "openssl", "enc", "-aes-256-cbc", "-d",
+        "-pbkdf2",
+        "-iter", "100000",
+        "-out", str(output_file),
+        "-in", str(input_file)
     ]
+
+    if password:
+        cmd.extend(["-pass", f"pass:{password}"])
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
-            return output_dir / input_file.stem.replace(".gpg", "").replace(".enc", "")
+            return output_file
         else:
-            error(i18n("decryption_failed"))
+            error(f"Decryption failed: {result.stderr}")
             return None
     except Exception as e:
         error(f"Decryption error: {e}")
         return None
+
+
+def encrypt_file(input_file: Path, method: str = "openssl", recipient: str = None) -> Optional[Path]:
+    password = os.environ.get("ENVAULT_PASSWORD")
+
+    if method == "openssl" or method == "aes":
+        return encrypt_file_openssl(input_file, password)
+    else:
+        return encrypt_file_openssl(input_file, password)
+
+
+def decrypt_file(input_file: Path, method: str = "openssl", password: str = None, output_dir: Path = None) -> Optional[Path]:
+    if not password:
+        password = os.environ.get("ENVAULT_PASSWORD")
+
+    if method == "openssl" or method == "aes":
+        return decrypt_file_openssl(input_file, password, output_dir)
+    else:
+        return decrypt_file_openssl(input_file, password, output_dir)
 
 
 def upload_catbox(file_path: Path) -> Optional[str]:
@@ -389,22 +625,72 @@ def upload_uguu(file_path: Path) -> Optional[str]:
     return None
 
 
+def cleanup_old_backups(keep_days: int = 7, keep_count: int = 10) -> int:
+    removed = 0
+    now = datetime.now()
+    backup_files = sorted(
+        list(DEFAULT_BACKUP_DIR.glob("*.tar.gz")) +
+        list(DEFAULT_BACKUP_DIR.glob("*.tar.bz2")) +
+        list(DEFAULT_BACKUP_DIR.glob("*.tar.xz")) +
+        list(DEFAULT_BACKUP_DIR.glob("*.zip")) +
+        list(DEFAULT_BACKUP_DIR.glob("*.enc")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    )
+
+    for i, backup in enumerate(backup_files):
+        should_remove = False
+
+        if i >= keep_count:
+            should_remove = True
+
+        try:
+            age_days = (now - datetime.fromtimestamp(backup.stat().st_mtime)).days
+            if age_days > keep_days:
+                should_remove = True
+        except Exception:
+            pass
+
+        if should_remove:
+            backup.unlink()
+            checksum = backup.with_suffix(f"{backup.suffix}.sha256")
+            if checksum.exists():
+                checksum.unlink()
+            removed += 1
+
+    if removed > 0:
+        info(i18n("cleanup_complete", removed))
+
+    return removed
+
+
 def full_backup(config: Dict[str, Any]) -> bool:
     log(i18n("start_backup"))
+
+    rotate_log_if_needed(config.get("log", {}).get("max_size_mb", 10))
+
+    incremental_config = config.get("incremental", {})
+    incremental_enabled = incremental_config.get("enabled", False)
+
+    verify_config = config.get("verify", {})
+    verify_enabled = verify_config.get("enabled", True)
 
     backup_file = create_backup_with_excludes(
         source_dirs=config.get("backup_dirs", []),
         exclude_patterns=config.get("exclude_patterns", []),
-        compression=config.get("compression", "tar.gz")
+        compression=config.get("compression", "tar.gz"),
+        incremental=incremental_enabled,
+        verify=verify_enabled
     )
 
     if not backup_file:
-        error("Backup failed")
-        return False
+        info("No backup created (no changes or error)")
+        return True
 
-    if config.get("encryption", {}).get("enabled"):
-        recipient = config.get("encryption", {}).get("recipient")
-        backup_file = encrypt_file(backup_file, recipient) or backup_file
+    enc_config = config.get("encryption", {})
+    if enc_config.get("enabled", False):
+        method = enc_config.get("method", "openssl")
+        backup_file = encrypt_file(backup_file, method) or backup_file
 
     restic_config = config.get("restic", {})
     if restic_config.get("enabled", True):
@@ -415,10 +701,18 @@ def full_backup(config: Dict[str, Any]) -> bool:
                 if source_path.exists():
                     create_restic_snapshot(source_path, f"backup {datetime.now().isoformat()}")
 
+    cleanup_config = config.get("cleanup", {})
+    if cleanup_config.get("enabled", False):
+        cleanup_old_backups(
+            cleanup_config.get("keep_days", 7),
+            cleanup_config.get("keep_count", 10)
+        )
+
     links = {
         "timestamp": datetime.now().isoformat(),
         "compression": config.get("compression", "tar.gz"),
-        "encrypted": config.get("encryption", {}).get("enabled", False),
+        "encrypted": enc_config.get("enabled", False),
+        "incremental": incremental_enabled,
         "files": {"local": str(backup_file)}
     }
 
@@ -432,7 +726,7 @@ def full_backup(config: Dict[str, Any]) -> bool:
                 links["files"]["catbox"] = url
 
         if cloud_config.get("tmpfiles", True):
-            temp_file = backup_file.with_suffix(ext + ".tgz") if ".gz" in str(ext) else backup_file.with_suffix(ext + ".tgz")
+            temp_file = backup_file.with_suffix(str(ext) + ".tgz")
             shutil.copy2(backup_file, temp_file)
             if url := upload_tmpfiles(temp_file):
                 links["files"]["tmpfiles"] = url
@@ -458,24 +752,29 @@ def restore_backup(backup_file: Path, target_dir: Path = None, password: str = N
         error(f"Backup file not found: {backup_file}")
         return False
 
+    target_dir = target_dir or Path.home()
     working_file = backup_file
 
-    if backup_file.suffix in [".gpg", ".enc"]:
+    if backup_file.suffix == ".enc":
         if not password:
-            password = os.environ.get("GPG_PASSWORD")
+            password = os.environ.get("ENVAULT_PASSWORD")
         if password:
-            env = os.environ.copy()
-            env["GPG_PASSWORD"] = password
-            decrypted = decrypt_file(backup_file)
+            decrypted = decrypt_file(backup_file, "openssl", password, target_dir)
             if decrypted:
                 working_file = decrypted
             else:
                 return False
         else:
-            error("Encrypted file requires GPG_PASSWORD env var")
+            error("Encrypted file requires ENVAULT_PASSWORD env var")
             return False
 
-    target_dir = target_dir or Path.home()
+    verify_config = {"enabled": True, "algorithm": "sha256"}
+    if verify_config.get("enabled", True):
+        valid, msg = verify_archive(working_file, verify_config.get("algorithm", "sha256"))
+        if not valid:
+            error(i18n("verification_failed", msg))
+            return False
+        info(i18n("backup_verified", msg))
 
     try:
         if working_file.suffix == ".zip":
@@ -576,23 +875,28 @@ Commands:
     restore <file>      Restore from backup file
     list                List Restic snapshots
     prune [n]           Keep last n snapshots (default: 10)
+    cleanup             Clean old local backups
     init                Initialize config file
     config              Show current config
+    verify <file>       Verify backup file integrity
     help                Show this help
 
 Options:
     --config <file>     Use custom config file
     --format <fmt>      Compression format: tar.gz, tar.bz2, tar.xz, zip
     --encrypt           Enable encryption
+    --openssl          Use OpenSSL encryption (default)
     --exclude <pattern> Add exclusion pattern
+    --incremental       Enable incremental backup
     --lang <lang>       Language: en, zh, es
 
 Examples:
     envault backup
     envault backup /path/to/dir --encrypt --format zip
-    envault restore backup-20260403.tar.gz --format tar.gz
-    envault list
-    envault prune 5
+    envault backup --incremental
+    envault restore backup.tar.gz
+    envault verify backup.tar.gz.sha256
+    envault cleanup
     envault init
 
 Config File: {DEFAULT_CONFIG_FILE}
@@ -600,10 +904,10 @@ Config File: {DEFAULT_CONFIG_FILE}
 """)
     print("Environment Variables:")
     print("  RESTIC_PASSWORD     Restic repository password")
-    print("  GPG_PASSWORD        Decryption password")
-    print("  GOFILE_ACCOUNT_ID   Gofile account ID")
-    print("  GOFILE_TOKEN        Gofile token")
-    print("  ENVAULT_LANG        Language (en/zh/es)")
+    print("  ENVAULT_PASSWORD   Encryption/decryption password")
+    print("  GOFILE_ACCOUNT_ID Gofile account ID")
+    print("  GOFILE_TOKEN     Gofile token")
+    print("  ENVAULT_LANG      Language (en/zh/es)")
 
 
 def show_config(config: Dict[str, Any]):
@@ -621,7 +925,9 @@ def main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--format", "--compression", dest="format")
     parser.add_argument("--encrypt", action="store_true")
+    parser.add_argument("--openssl", action="store_true")
     parser.add_argument("--exclude", action="append", dest="excludes")
+    parser.add_argument("--incremental", action="store_true")
     parser.add_argument("--lang", dest="lang")
     parser.add_argument("--name", dest="name")
     args, unknown = parser.parse_known_args()
@@ -637,8 +943,11 @@ def main():
         config["compression"] = args.format
     if args.excludes:
         config["exclude_patterns"].extend(args.excludes)
-    if args.encrypt:
+    if args.encrypt or args.openssl:
         config["encryption"]["enabled"] = True
+        config["encryption"]["method"] = "openssl"
+    if args.incremental:
+        config["incremental"]["enabled"] = True
 
     command = args.command or "help"
 
@@ -651,11 +960,13 @@ def main():
                     [{"path": str(source), "name": backup_name}],
                     config.get("exclude_patterns", []),
                     config.get("compression", "tar.gz"),
-                    backup_name
+                    backup_name,
+                    incremental=config.get("incremental", {}).get("enabled", False),
+                    verify=config.get("verify", {}).get("enabled", True)
                 )
                 if file:
                     if config.get("encryption", {}).get("enabled"):
-                        encrypt_file(file, config.get("encryption", {}).get("recipient"))
+                        encrypt_file(file, config.get("encryption", {}).get("method", "openssl"))
                     restic_config = config.get("restic", {})
                     if restic_config.get("enabled", True) and os.environ.get("RESTIC_PASSWORD"):
                         create_restic_snapshot(source, f"backup {datetime.now().isoformat()}")
@@ -675,6 +986,24 @@ def main():
     elif command == "prune":
         keep = int(args.arg1) if args.arg1 else 10
         prune_snapshots(keep)
+
+    elif command == "cleanup":
+        cleanup_config = config.get("cleanup", {})
+        cleanup_old_backups(
+            cleanup_config.get("keep_days", 7),
+            cleanup_config.get("keep_count", 10)
+        )
+
+    elif command == "verify":
+        if args.arg1:
+            file_path = Path(args.arg1)
+            valid, msg = verify_archive(file_path, "sha256")
+            if valid:
+                info(i18n("backup_verified", msg))
+            else:
+                error(i18n("verification_failed", msg))
+        else:
+            error("Specify file to verify")
 
     elif command == "init":
         init_config()

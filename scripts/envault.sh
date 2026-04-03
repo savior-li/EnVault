@@ -10,6 +10,7 @@ VERSION="1.1.0"
 CONFIG_DIR="${XDG_CONFIG_DIR:-$HOME/.config}/envault"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 BACKUP_DIR="${BACKUP_DIR:-$HOME/.envault}"
+LOG_DIR="${BACKUP_DIR}/logs"
 RESTIC_REPO="${BACKUP_DIR}/restic"
 
 CATBOX_URL="https://catbox.moe/user/api.php"
@@ -28,65 +29,13 @@ NC='\033[0m'
 
 LANG="${ENVAULT_LANG:-en}"
 
-i18n() {
-    local key="$1"
-    shift
-    case "$LANG" in
-        zh)
-            case "$key" in
-                start) echo "开始备份流程..." ;;
-                complete) echo "备份完成" ;;
-                restore) echo "恢复完成" ;;
-                upload_ok) echo "上传成功: $1" ;;
-                upload_fail) echo "上传失败: $1" ;;
-                encrypt) echo "加密已启用" ;;
-                decrypt_fail) echo "解密失败" ;;
-                config_load) echo "配置已加载: $1 个目录" ;;
-                excluded) echo "已排除 $1 个匹配规则的文件" ;;
-                format) echo "使用压缩格式: $1" ;;
-                *) echo "$key" ;;
-            esac
-            ;;
-        es)
-            case "$key" in
-                start) echo "Iniciando proceso de respaldo..." ;;
-                complete) echo "Respaldo completo" ;;
-                restore) echo "Restauración completa" ;;
-                upload_ok) echo "Subida exitosa: $1" ;;
-                upload_fail) echo "Subida fallida: $1" ;;
-                encrypt) echo "Cifrado habilitado" ;;
-                decrypt_fail) echo "Descifrado fallido" ;;
-                config_load) echo "Configuración cargada: $1 directorios" ;;
-                excluded) echo "Excluidos $1 archivos" ;;
-                format) echo "Usando formato: $1" ;;
-                *) echo "$key" ;;
-            esac
-            ;;
-        *)
-            case "$key" in
-                start) echo "Starting backup process..." ;;
-                complete) echo "Backup complete" ;;
-                restore) echo "Restore complete" ;;
-                upload_ok) echo "Upload successful: $1" ;;
-                upload_fail) echo "Upload failed: $1" ;;
-                encrypt) echo "Encryption enabled" ;;
-                decrypt_fail) echo "Decryption failed" ;;
-                config_load) echo "Config loaded: $1 directories" ;;
-                excluded) echo "Excluded $1 files matching rules" ;;
-                format) echo "Using compression format: $1" ;;
-                *) echo "$key" ;;
-            esac
-            ;;
-    esac
-}
-
 log() { echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
 warn() { echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
 error() { echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
 info() { echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
 
 check_deps() {
-    local deps=("tar" "curl" "gpg" "python3")
+    local deps=("tar" "curl" "openssl")
     for dep in "${deps[@]}"; do
         if ! command -v $dep &> /dev/null; then
             warn "$dep not found"
@@ -97,7 +46,7 @@ check_deps() {
 init_dirs() {
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$BACKUP_DIR"
-    mkdir -p "$BACKUP_DIR/logs"
+    mkdir -p "$LOG_DIR"
     mkdir -p "$RESTIC_REPO"
 }
 
@@ -119,7 +68,8 @@ compression: tar.gz
 
 encryption:
   enabled: false
-  recipient: null
+  method: openssl
+  password: null
 
 cloud_upload:
   catbox: true
@@ -130,6 +80,17 @@ cloud_upload:
 restic:
   enabled: true
   keep_last: 10
+
+cleanup:
+  enabled: false
+  keep_days: 7
+  keep_count: 10
+
+incremental:
+  enabled: false
+
+verify:
+  enabled: true
 
 language: en
 EOF
@@ -164,6 +125,63 @@ match_exclude() {
     return 1
 }
 
+rotate_log() {
+    local max_size_mb="${1:-10}"
+    local log_file="${LOG_DIR}/envault.log"
+    
+    if [ ! -f "$log_file" ]; then
+        return 0
+    fi
+    
+    local size_mb=$(du -m "$log_file" 2>/dev/null | cut -f1)
+    
+    if [ "$size_mb" -gt "$max_size_mb" ] 2>/dev/null; then
+        local archive_name="envault-$(date +%Y%m%d-%H%M%S).log"
+        mv "$log_file" "${LOG_DIR}/${archive_name}"
+        touch "$log_file"
+        info "Log rotated: ${size_mb}MB archived"
+    fi
+}
+
+log_to_file() {
+    local msg="[$(date -Iseconds)] $1"
+    echo "$msg" >> "${LOG_DIR}/envault.log" 2>/dev/null
+}
+
+get_file_hash() {
+    local file="$1"
+    openssl dgst -sha256 "$file" 2>/dev/null | awk '{print $2}'
+}
+
+verify_archive() {
+    local archive="$1"
+    local checksum="${archive}.sha256"
+    
+    if [ ! -f "$checksum" ]; then
+        echo "Checksum file not found"
+        return 1
+    fi
+    
+    local expected_hash=$(cat "$checksum")
+    local actual_hash=$(get_file_hash "$archive")
+    
+    if [ "$expected_hash" = "$actual_hash" ]; then
+        echo "sha256:$actual_hash"
+        return 0
+    else
+        echo "Hash mismatch"
+        return 1
+    fi
+}
+
+create_checksum() {
+    local archive="$1"
+    local checksum="${archive}.sha256"
+    local hash=$(get_file_hash "$archive")
+    echo "$hash" > "$checksum"
+    echo "$checksum"
+}
+
 create_backup() {
     local source_dir="$1"
     local backup_name="$2"
@@ -171,14 +189,14 @@ create_backup() {
     local exclude_patterns="$4"
     
     local timestamp=$(date +%Y%m%d-%H%M%S)
-    local backup_file="${BACKUP_DIR}/${backup_name}-${timestamp}.tar.gz"
+    local backup_file="${BACKUP_DIR}/${backup_name}-${timestamp}.${compression}"
     
     if [ ! -d "$source_dir" ]; then
         error "Source directory not found: $source_dir"
         return 1
     fi
     
-    log "$(i18n format "$compression")"
+    info "Using compression format: $compression"
     
     local excluded_count=0
     local temp_dir="${BACKUP_DIR}/temp_${timestamp}"
@@ -193,62 +211,100 @@ create_backup() {
     fi
     
     if [ $excluded_count -gt 0 ]; then
-        info "$(i18n excluded "$excluded_count")"
+        info "Excluded $excluded_count files matching rules"
     fi
     
     case "$compression" in
         zip)
             backup_file="${BACKUP_DIR}/${backup_name}-${timestamp}.zip"
-            zip -r "$backup_file" -q "$source_dir" --exclude "*.log" --exclude "*.tmp" --exclude "__pycache__/*"
-            ;;
-        tar.gz)
-            tar -czf "$backup_file" -C "$HOME" "$(basename "$source_dir")" 2>/dev/null
+            zip -r "$backup_file" -q "$source_dir" \
+                --exclude "*.log" --exclude "*.tmp" \
+                --exclude "__pycache__/*" --exclude ".git/*" \
+                --exclude "node_modules/*" --exclude ".cache/*"
             ;;
         tar.bz2)
-            backup_file="${backup_file%.gz}.bz2"
+            backup_file="${BACKUP_DIR}/${backup_name}-${timestamp}.tar.bz2"
             tar -cjf "$backup_file" -C "$HOME" "$(basename "$source_dir")" 2>/dev/null
             ;;
         tar.xz)
-            backup_file="${backup_file%.gz}.xz"
+            backup_file="${BACKUP_DIR}/${backup_name}-${timestamp}.tar.xz"
             tar -cJf "$backup_file" -C "$HOME" "$(basename "$source_dir")" 2>/dev/null
             ;;
         *)
+            backup_file="${BACKUP_DIR}/${backup_name}-${timestamp}.tar.gz"
             tar -czf "$backup_file" -C "$HOME" "$(basename "$source_dir")" 2>/dev/null
             ;;
     esac
     
-    log "$(i18n complete)"
-    echo "$backup_file"
-}
-
-encrypt_backup() {
-    local backup_file="$1"
-    local recipient="$2"
-    
-    log "$(i18n encrypt)"
-    
-    local encrypted_file="${backup_file}.gpg"
-    
-    if [ -n "$recipient" ]; then
-        gpg --batch --yes --recipient "$recipient" --encrypt --compress-algo none "$backup_file"
-    else
-        gpg --batch --yes --symmetric --compress-algo none "$backup_file"
+    if [ -f "$backup_file" ]; then
+        log "Backup created: $backup_file"
+        create_checksum "$backup_file" > /dev/null
+        echo "$backup_file"
     fi
     
-    rm -f "$backup_file"
-    echo "$encrypted_file"
+    rm -rf "$temp_dir"
+}
+
+encrypt_openssl() {
+    local input_file="$1"
+    local password="${ENVAULT_PASSWORD:-}"
+    local output_file="${input_file}.enc"
+    
+    if [ -z "$password" ]; then
+        warn "ENVAULT_PASSWORD not set, skipping encryption"
+        return 1
+    fi
+    
+    log "Encryption enabled"
+    
+    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+        -out "$output_file" -in "$input_file" \
+        -pass "pass:$password" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        rm -f "$input_file"
+        rm -f "${input_file}.sha256" 2>/dev/null
+        echo "$output_file"
+    else
+        error "Encryption failed"
+        return 1
+    fi
+}
+
+decrypt_openssl() {
+    local input_file="$1"
+    local password="${ENVAULT_PASSWORD:-}"
+    local output_dir="${2:-$HOME}"
+    
+    if [ -z "$password" ]; then
+        error "ENVAULT_PASSWORD not set"
+        return 1
+    fi
+    
+    local output_file="${output_dir}/$(basename "${input_file%.enc}")"
+    
+    openssl enc -aes-256-cbc -d -pbkdf2 -iter 100000 \
+        -out "$output_file" -in "$input_file" \
+        -pass "pass:$password" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        echo "$output_file"
+    else
+        error "Decryption failed"
+        return 1
+    fi
 }
 
 upload_catbox() {
     local file="$1"
-    log "Uploading to Catbox..."
+    info "Uploading to Catbox..."
     local result=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$file" "$CATBOX_URL")
     echo "$result"
 }
 
 upload_tmpfiles() {
     local file="$1"
-    log "Uploading to Tmpfiles..."
+    info "Uploading to Tmpfiles..."
     local result=$(curl -s -F "file=@$file" "$TMPFILES_URL")
     echo "$result" | grep -oP 'https?://tmpfiles.org/[^"]+'
 }
@@ -259,10 +315,11 @@ upload_gofile() {
     local token="$GOFILE_TOKEN"
     
     if [ -z "$account_id" ] || [ -z "$token" ]; then
+        warn "Gofile credentials not set"
         return 1
     fi
     
-    log "Uploading to Gofile..."
+    info "Uploading to Gofile..."
     local result=$(curl -s \
         -F "file=@$file" \
         -F "accountId=$account_id" \
@@ -273,21 +330,51 @@ upload_gofile() {
 
 upload_uguu() {
     local file="$1"
-    log "Uploading to Uguu..."
+    info "Uploading to Uguu..."
     local result=$(curl -s -F "file=@$file" "$UGUU_URL")
     echo "$result" | grep -oP 'https?://[^"]+'
 }
 
+cleanup_old_backups() {
+    local keep_days="${1:-7}"
+    local keep_count="${2:-10}"
+    local removed=0
+    
+    mapfile -t backups < <(find "$BACKUP_DIR" -maxdepth 1 \( -name "*.tar.gz" -o -name "*.tar.bz2" -o -name "*.tar.xz" -o -name "*.zip" -o -name "*.enc" \) -type f -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
+    
+    for i in "${!backups[@]}"; do
+        if [ $i -ge $keep_count ]; then
+            rm -f "${backups[$i]}"
+            rm -f "${backups[$i]}.sha256" 2>/dev/null
+            removed=$((removed + 1))
+            continue
+        fi
+        
+        local age_days=$(($(date +%s) - $(stat -c %Y "${backups[$i]}" 2>/dev/null || echo 0) / 86400))
+        if [ $age_days -gt $keep_days ] 2>/dev/null; then
+            rm -f "${backups[$i]}"
+            rm -f "${backups[$i]}.sha256" 2>/dev/null
+            removed=$((removed + 1))
+        fi
+    done
+    
+    if [ $removed -gt 0 ]; then
+        info "Cleanup complete: removed $removed files"
+    fi
+}
+
 full_backup() {
-    log "$(i18n start)"
+    log "Starting backup process..."
+    
+    rotate_log 10
     
     local compression=$(grep "^compression:" "$CONFIG_FILE" | cut -d' ' -f2)
-    local backup_file=$(create_backup "$HOME/.openclaw" "envault" "$compression")
+    local backup_file=$(create_backup "$HOME/.openclaw" "envault" "$compression" "$(grep -A20 '^exclude_patterns:' "$CONFIG_FILE" | grep -v '^exclude_patterns:' | grep -v '^$' | sed 's/^  - //' | tr '\n' ' ')")
     
     if [ -f "$CONFIG_FILE" ] && grep -q "enabled: true" "$CONFIG_FILE"; then
         if grep -A1 "encryption:" "$CONFIG_FILE" | grep -q "enabled: true"; then
-            local recipient=$(grep "recipient:" "$CONFIG_FILE" | cut -d' ' -f2 | tr -d '""')
-            backup_file=$(encrypt_backup "$backup_file" "$recipient")
+            encrypt_openssl "$backup_file"
+            backup_file="${backup_file}.enc"
         fi
     fi
     
@@ -296,9 +383,7 @@ full_backup() {
     
     if [ -f "$backup_file" ]; then
         local ext="${backup_file##*.}"
-        if [ "$ext" = "gz" ] || [ "$ext" = "bz2" ] || [ "$ext" = "xz" ]; then
-            ext="tgz"
-        fi
+        [ "$ext" = "gz" ] && ext="tgz"
         
         if grep -q "catbox: true" "$CONFIG_FILE" 2>/dev/null; then
             local catbox_url=$(upload_catbox "$backup_file")
@@ -326,9 +411,14 @@ full_backup() {
     
     links_json="$links_json}}"
     echo "$links_json" > "$links_file"
-    log "Links saved: $links_file"
     
-    log "$(i18n complete)"
+    if grep -q "cleanup:" "$CONFIG_FILE" && grep -A1 "cleanup:" "$CONFIG_FILE" | grep -q "enabled: true"; then
+        local keep_days=$(grep "keep_days:" "$CONFIG_FILE" | cut -d' ' -f2)
+        local keep_count=$(grep "keep_count:" "$CONFIG_FILE" | cut -d' ' -f2)
+        cleanup_old_backups "${keep_days:-7}" "${keep_count:-10}"
+    fi
+    
+    log "Backup complete"
 }
 
 restore_backup() {
@@ -342,17 +432,25 @@ restore_backup() {
     
     log "Restoring to: $target_dir"
     
-    if [[ "$backup_file" == *.gpg ]] || [[ "$backup_file" == *.enc ]]; then
-        local password="${GPG_PASSWORD}"
+    if [[ "$backup_file" == *.enc ]]; then
+        local password="${ENVAULT_PASSWORD}"
         if [ -z "$password" ]; then
-            error "Encrypted file requires GPG_PASSWORD env var"
+            error "Encrypted file requires ENVAULT_PASSWORD env var"
             return 1
         fi
-        export GPG_PASSWORD="$password"
-        local decrypted="${backup_file%.gpg}"
-        decrypted="${decrypted%.enc}"
-        gpg --batch --yes --decrypt --output "$decrypted" "$backup_file"
-        backup_file="$decrypted"
+        backup_file=$(decrypt_openssl "$backup_file" "$target_dir")
+        if [ $? -ne 0 ]; then
+            return 1
+        fi
+    fi
+    
+    local verify_enabled=$(grep "enabled:" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d' ' -f2)
+    if [ "$verify_enabled" = "true" ]; then
+        if verify_archive "$backup_file"; then
+            info "Backup verified"
+        else
+            warn "Verification failed"
+        fi
     fi
     
     case "$backup_file" in
@@ -370,7 +468,7 @@ restore_backup() {
             ;;
     esac
     
-    log "$(i18n restore)"
+    log "Restore complete"
 }
 
 show_help() {
@@ -381,34 +479,39 @@ Usage: envault <command> [options]
 
 Commands:
     backup              Run full backup (uses config)
-    backup <dir>        Backup single directory
+    backup <dir>       Backup single directory
     restore <file>      Restore from backup
     list                List Restic snapshots
     prune [n]           Keep last n snapshots
+    cleanup             Clean old local backups
     init                Initialize config
     config              Show current config
+    verify <file>       Verify backup integrity
     help                Show this help
 
 Options:
     --format <fmt>      Compression: tar.gz, tar.bz2, tar.xz, zip
     --encrypt           Enable encryption
     --exclude <pattern> Add exclusion pattern
+    --incremental       Enable incremental backup
     --lang <lang>       Language: en, zh, es
+    --name <name>       Backup name
 
 Examples:
     envault backup
     envault backup /path/to/dir --encrypt --format zip
     envault restore backup.tar.gz
-    envault init
+    envault verify backup.tar.gz.sha256
+    envault cleanup
 
 Config: ${CONFIG_FILE}
 
 Environment Variables:
     RESTIC_PASSWORD     Restic password
-    GPG_PASSWORD        Decryption password
-    GOFILE_ACCOUNT_ID   Gofile account
-    GOFILE_TOKEN        Gofile token
-    ENVAULT_LANG        Language (en/zh/es)
+    ENVAULT_PASSWORD    Encryption password
+    GOFILE_ACCOUNT_ID  Gofile account
+    GOFILE_TOKEN       Gofile token
+    ENVAULT_LANG       Language (en/zh/es)
 
 EOF
 }
@@ -418,25 +521,89 @@ main() {
     init_dirs
     
     local command="${1:-help}"
-    shift 2>/dev/null
+    shift
+    
+    local args=()
+    local encrypt=false
+    local incremental=false
+    local format=""
+    local excludes=()
+    local name=""
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --encrypt)
+                encrypt=true
+                shift
+                ;;
+            --openssl)
+                encrypt=true
+                shift
+                ;;
+            --incremental)
+                incremental=true
+                shift
+                ;;
+            --format|--compression)
+                format="$2"
+                shift 2
+                ;;
+            --exclude)
+                excludes+=("$2")
+                shift 2
+                ;;
+            --name)
+                name="$2"
+                shift 2
+                ;;
+            --lang)
+                LANG="$2"
+                shift 2
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            -*)
+                shift
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
     
     case "$command" in
         backup)
-            if [ -n "$1" ]; then
-                local backup_file=$(create_backup "$1" "$(basename "$1")" "${2:-tar.gz}")
-                if [ "$3" = "--encrypt" ]; then
-                    backup_file=$(encrypt_backup "$backup_file")
+            if [ ${#args[@]} -gt 0 ]; then
+                local source="${args[0]}"
+                local backup_name="${name:-$(basename "$source")}"
+                local comp="${format:-tar.gz}"
+                
+                local exclude_str=""
+                for ex in "${excludes[@]}"; do
+                    exclude_str="$exclude_str$ex "
+                done
+                
+                local backup_file=$(create_backup "$source" "$backup_name" "$comp" "$exclude_str")
+                
+                if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
+                    if [ "$encrypt" = true ]; then
+                        encrypt_openssl "$backup_file"
+                    fi
                 fi
             else
                 full_backup
             fi
             ;;
         restore)
-            if [ -z "$1" ]; then
+            if [ ${#args[@]} -gt 0 ]; then
+                restore_backup "${args[0]}" "${args[1]:-}"
+            else
                 error "Specify backup file"
                 exit 1
             fi
-            restore_backup "$1" "$2"
             ;;
         list)
             if [ -z "$RESTIC_PASSWORD" ]; then
@@ -452,7 +619,10 @@ main() {
                 exit 1
             fi
             export RESTIC_PASSWORD
-            restic forget --repo "$RESTIC_REPO" --keep-last "${1:-10}" --prune
+            restic forget --repo "$RESTIC_REPO" --keep-last "${args[0]:-10}" --prune
+            ;;
+        cleanup)
+            cleanup_old_backups 7 10
             ;;
         init)
             get_default_config | save_config
@@ -460,11 +630,24 @@ main() {
         config)
             load_config
             ;;
+        verify)
+            if [ ${#args[@]} -gt 0 ]; then
+                if verify_archive "${args[0]}"; then
+                    info "Verification successful"
+                else
+                    error "Verification failed"
+                    exit 1
+                fi
+            else
+                error "Specify file to verify"
+                exit 1
+            fi
+            ;;
         help|--help|-h)
             show_help
             ;;
         *)
-            error "$(i18n upload_fail "$command")"
+            error "Unknown command: $command"
             show_help
             exit 1
             ;;
