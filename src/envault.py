@@ -50,6 +50,7 @@ class I18n:
         "en": {
             "start_backup": "Starting backup process...",
             "backup_complete": "Backup complete",
+            "backup_created": "Backup created: {}",
             "restore_complete": "Restore complete",
             "upload_success": "Upload successful: {}",
             "upload_failed": "Upload failed: {}",
@@ -63,6 +64,7 @@ class I18n:
         "zh": {
             "start_backup": "开始备份流程...",
             "backup_complete": "备份完成",
+            "backup_created": "备份已创建: {}",
             "restore_complete": "恢复完成",
             "upload_success": "上传成功: {}",
             "upload_failed": "上传失败: {}",
@@ -76,6 +78,7 @@ class I18n:
         "es": {
             "start_backup": "Iniciando proceso de respaldo...",
             "backup_complete": "Respaldo completo",
+            "backup_created": "Respaldo creado: {}",
             "restore_complete": "Restauración completa",
             "upload_success": "Subida exitosa: {}",
             "upload_failed": "Subida fallida: {}",
@@ -257,7 +260,7 @@ def create_backup_with_excludes(
             with tarfile.open(backup_file, f"w:{compression.split('.')[-1]}" if "." in compression else "w") as tar:
                 tar.add(temp_dir, arcname=".")
 
-        log(f"Backup created: {backup_file}")
+        log(i18n("backup_created", backup_file))
         return backup_file
 
     except Exception as e:
@@ -280,7 +283,10 @@ def encrypt_file(input_file: Path, recipient: str = None) -> Optional[Path]:
     cmd.extend(["--output", str(output_file), str(input_file)])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        env = os.environ.copy()
+        if os.environ.get("GPG_PASSWORD"):
+            env["GPG_PASSWORD"] = os.environ["GPG_PASSWORD"]
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         if result.returncode == 0:
             info(i18n("encryption_enabled"))
             input_file.unlink()
@@ -351,6 +357,7 @@ def upload_gofile(file_path: Path) -> Optional[str]:
     token = os.environ.get("GOFILE_TOKEN")
 
     if not account_id or not token:
+        warn("Gofile upload skipped: GOFILE_ACCOUNT_ID or GOFILE_TOKEN not set")
         return None
 
     try:
@@ -613,6 +620,7 @@ def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("command", nargs="?")
     parser.add_argument("arg1", nargs="?")
+    parser.add_argument("arg2", nargs="?")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--format", "--compression", dest="format")
     parser.add_argument("--encrypt", action="store_true")
@@ -648,8 +656,12 @@ def main():
                     config.get("compression", "tar.gz"),
                     backup_name
                 )
-                if file and config.get("encryption", {}).get("enabled"):
-                    encrypt_file(file, config.get("encryption", {}).get("recipient"))
+                if file:
+                    if config.get("encryption", {}).get("enabled"):
+                        encrypt_file(file, config.get("encryption", {}).get("recipient"))
+                    restic_config = config.get("restic", {})
+                    if restic_config.get("enabled", True) and os.environ.get("RESTIC_PASSWORD"):
+                        create_restic_snapshot(source, f"backup {datetime.now().isoformat()}")
         else:
             full_backup(config)
 
@@ -657,7 +669,7 @@ def main():
         if not args.arg1:
             error("Specify backup file")
             sys.exit(1)
-        target = Path(args.arg2) if len(unknown) > 1 else None
+        target = Path(args.arg2) if args.arg2 else None
         restore_backup(Path(args.arg1), target)
 
     elif command == "list":
