@@ -1,14 +1,18 @@
-# DevEnv Backup Tool
+# EnVault
 
-开发环境数据备份、快照、上传网盘一体化工具。
+**开发环境备份、快照、上传网盘一体化工具**
 
-## 功能特性
+解决开发环境/沙盒重启后数据丢失的痛点。
 
-- 本地压缩备份 (tar.gz)
-- Restic 增量快照管理
-- 多网盘上传 (Catbox, Tmpfiles, Gofile)
-- 备份记录管理
-- 定时备份支持
+## 核心功能
+
+- **多目录备份** - YAML 配置定义要备份的多个目录
+- **排除规则** - 支持通配符忽略不需要的文件
+- **备份加密** - GPG 非对称/对称加密保护敏感数据
+- **多格式压缩** - tar.gz, tar.bz2, tar.xz, zip
+- **Restic 增量快照** - 节省存储空间
+- **多网盘上传** - Catbox, Tmpfiles, Gofile, Uguu
+- **多语言** - English, 中文, Español
 
 ## 支持平台
 
@@ -16,170 +20,210 @@
 - macOS
 - Windows (WSL)
 
-## 安装
+## 快速开始
 
-### 方式一：直接下载
-
-```bash
-# 下载脚本
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/scripts/backup-tool.sh -o ~/bin/backup-tool
-chmod +x ~/bin/backup-tool
-
-# 或下载 Python 版本
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/backup_tool.py -o ~/bin/backup-tool.py
-chmod +x ~/bin/backup-tool.py
-```
-
-### 方式二：克隆仓库
+### 安装
 
 ```bash
-git clone https://github.com/savior-li/backup-tool.git
-cd backup-tool
+# 下载 Python 版本 (推荐)
+curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py -o ~/bin/envault
+chmod +x ~/bin/envault
+
+# 或下载 Bash 版本
+curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/scripts/envault.sh -o ~/bin/envault
+chmod +x ~/bin/envault
 ```
 
-## 依赖
-
-- `tar` - 压缩工具 (系统自带)
-- `curl` - HTTP 客户端 (系统自带)
-- `restic` - 增量备份工具
-- `requests` - Python 版依赖 (可选)
-
-### 安装 restic
+### 初始化配置
 
 ```bash
-# macOS
-brew install restic
-
-# Linux
-apt install restic
-# 或
-yum install restic
-
-# 或下载二进制
-curl -LO https://github.com/restic/restic/releases/latest/download/restic_linux_amd64.bz2
-bunzip2 restic_linux_amd64.bz2
-mv restic_linux_amd64 /usr/local/bin/restic
-chmod +x /usr/local/bin/restic
+envault init  # 创建默认配置文件
 ```
 
-### 安装 Python 依赖 (Python 版本)
+配置文件位置: `~/.config/envault/config.yaml`
+
+### 基础用法
 
 ```bash
-pip install requests
+# 完整备份 (使用配置)
+envault backup
+
+# 备份指定目录
+envault backup /path/to/your/data
+
+# 恢复备份
+envault restore backup-file.tar.gz
+
+# 查看快照
+envault list
+
+# 清理旧快照
+envault prune 5
 ```
 
-## 配置
+## 配置文件
 
-### 环境变量
+编辑 `~/.config/envault/config.yaml`:
+
+```yaml
+# 要备份的目录
+backup_dirs:
+  - path: ~/.openclaw
+    name: openclaw
+  - path: ~/projects
+    name: projects
+
+# 排除规则
+exclude_patterns:
+  - "*.log"
+  - "*.tmp"
+  - "__pycache__"
+  - ".git"
+  - "node_modules"
+
+# 压缩格式
+compression: tar.gz
+
+# 加密
+encryption:
+  enabled: true
+  recipient: your@email.com  # GPG recipient
+
+# 云存储
+cloud_upload:
+  catbox: true
+  tmpfiles: true
+  uguu: false
+
+# Restic 快照
+restic:
+  enabled: true
+  keep_last: 10
+
+# 语言
+language: en
+```
+
+## 高级功能
+
+### 加密备份
+
+```bash
+# 对称加密 (需要输入密码)
+envault backup --encrypt
+
+# 或在配置中启用
+# encryption:
+#   enabled: true
+#   recipient: your@email.com
+```
+
+设置解密密码:
+```bash
+export GPG_PASSWORD="your-password"
+envault restore backup.tar.gz.gpg
+```
+
+### 压缩格式
+
+```bash
+# 指定压缩格式
+envault backup /path --format zip
+envault backup /path --format tar.bz2
+envault backup /path --format tar.xz
+```
+
+支持的格式:
+- `tar.gz` - 默认，兼容性好
+- `tar.bz2` - 更好的压缩率
+- `tar.xz` - 最高压缩率
+- `zip` - Windows 兼容
+
+### 排除规则
+
+```bash
+# 命令行添加排除
+envault backup /path --exclude "*.log" --exclude "__pycache__"
+
+# 或在配置中定义
+# exclude_patterns:
+#   - "*.log"
+#   - "*.tmp"
+```
+
+### 多网盘上传
+
+| 网盘 | 认证 | 说明 |
+|------|------|------|
+| Catbox | 无 | 最大 200MB |
+| Tmpfiles | 无 | 临时存储 |
+| Gofile | 需要 | 需要 API token |
+| Uguu | 无 | 临时存储 |
+
+Gofile API 获取: https://gofile.io/api
+
+```bash
+export GOFILE_ACCOUNT_ID="your-account-id"
+export GOFILE_TOKEN="your-token"
+envault backup
+```
+
+## 多语言
+
+```bash
+# 设置语言
+export ENVAULT_LANG=zh  # 中文
+export ENVAULT_LANG=es  # 西班牙语
+export ENVAULT_LANG=en  # 英语
+
+envault backup
+```
+
+## 环境变量
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `RESTIC_PASSWORD` | 是 | Restic 仓库密码 |
-| `GOFILE_ACCOUNT_ID` | 否 | Gofile 账户 ID |
-| `GOFILE_TOKEN` | 否 | Gofile 令牌 |
-| `BACKUP_DIR` | 否 | 备份存储目录 (默认: ~/.backup-tool) |
-| `OPENCLAW_DIR` | 否 | 要备份的目录 (默认: ~/.openclaw) |
-
-### 设置密码
-
-```bash
-export RESTIC_PASSWORD="your-strong-password"
-```
-
-建议将配置添加到 `~/.bashrc` 或 `~/.zshrc`:
-
-```bash
-echo 'export RESTIC_PASSWORD="your-strong-password"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-## 使用
-
-### 完整备份
-
-```bash
-# 备份 OpenClaw 数据
-backup-tool backup
-
-# 备份指定目录
-backup-tool backup /path/to/your/data
-```
-
-### 恢复备份
-
-```bash
-# 恢复到默认目录
-backup-tool restore backup-file.tar.gz
-
-# 恢复到指定目录
-backup-tool restore backup-file.tar.gz /target/path
-```
-
-### 快照管理
-
-```bash
-# 查看快照列表
-backup-tool list
-
-# 清理旧快照，保留最近 5 个
-backup-tool prune 5
-
-# 保留最近 10 个 (默认)
-backup-tool prune
-```
-
-### Python 版本
-
-```bash
-# 完整备份
-python backup-tool.py backup
-
-# 恢复
-python backup-tool.py restore backup-file.tar.gz
-
-# 列出快照
-python backup-tool.py list
-```
+| `RESTIC_PASSWORD` | 快照用 | Restic 仓库密码 |
+| `GPG_PASSWORD` | 解密用 | GPG 解密密码 |
+| `GOFILE_ACCOUNT_ID` | Gofile 用 | Gofile 账户 ID |
+| `GOFILE_TOKEN` | Gofile 用 | Gofile API Token |
+| `ENVAULT_LANG` | 否 | 语言 (en/zh/es) |
+| `BACKUP_DIR` | 否 | 备份存储目录 |
 
 ## 定时备份
 
-### Cron 示例
-
-每 10 分钟执行一次备份:
+### Cron
 
 ```bash
 crontab -e
 
-# 添加以下行
-*/10 * * * * /path/to/backup-tool backup >> ~/.backup-tool/logs/backup-cron.log 2>&1
+# 每小时备份
+0 * * * * /path/to/envault backup >> ~/.envault/logs/cron.log 2>&1
+
+# 每 10 分钟
+*/10 * * * * /path/to/envault backup
 ```
 
-每 6 小时执行一次:
+### Systemd
 
-```bash
-0 */6 * * * /path/to/backup-tool backup >> ~/.backup-tool/logs/backup-cron.log 2>&1
-```
-
-### Systemd 定时器 (Linux)
-
-创建服务文件 `~/.config/systemd/user/backup-tool.service`:
+创建 `~/.config/systemd/user/envault.service`:
 
 ```ini
 [Unit]
-Description=DevEnv Backup Tool
+Description=EnVault Backup
 
 [Service]
 Type=oneshot
-Environment=BACKUP_DIR=%h/.backup-tool
+Environment=BACKUP_DIR=%h/.envault
 Environment=RESTIC_PASSWORD=your-password
-ExecStart=/path/to/backup-tool backup
+ExecStart=/path/to/envault backup
 ```
 
-创建定时器文件 `~/.config/systemd/user/backup-tool.timer`:
+创建 `~/.config/systemd/user/envault.timer`:
 
 ```ini
 [Unit]
-Description=Run backup-tool every 6 hours
+Description=EnVault Backup Timer
 
 [Timer]
 OnCalendar=*-*-* *:00/6
@@ -189,52 +233,60 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-启用定时器:
+启用:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now backup-tool.timer
+systemctl --user enable --now envault.timer
 ```
 
-## 备份存储
+## 依赖
 
-### 目录结构
+| 依赖 | 必填 | 说明 |
+|------|------|------|
+| tar | 是 | 压缩工具 |
+| curl | 是 | HTTP 上传 |
+| gpg | 加密用 | GPG 加密 |
+| python3 | 推荐 | 运行 Python 版本 |
+| requests | Python版 | HTTP 库 |
+| restic | 快照用 | 增量备份 |
+
+安装依赖:
+
+```bash
+# Ubuntu/Debian
+apt install tar curl gpg restic
+
+# macOS
+brew install curl gpg restic
+
+# Python requests
+pip install requests pyyaml
+```
+
+## 存储结构
 
 ```
-~/.backup-tool/
-├── restic/              # Restic 快照存储
-├── logs/                # 日志文件
-├── openclaw-backup-*.tar.gz  # 压缩备份
+~/.envault/
+├── restic/              # Restic 快照
+├── logs/                # 日志
 ├── links-*.json         # 上传链接记录
-└── config               # 配置文件 (可选)
-```
-
-### 上传链接
-
-备份完成后，链接会保存到 `links-*.json` 文件:
-
-```json
-{
-  "timestamp": "2026-04-03T12:00:00+00:00",
-  "files": {
-    "local": "/root/.backup-tool/openclaw-backup-20260403-120000.tar.gz",
-    "catbox": "https://catbox.moe/xxx.gz",
-    "tmpfiles": "https://tmpfiles.org/xxx.tgz",
-    "gofile": "https://gofile.io/d/xxx"
-  }
-}
+└── *.tar.gz             # 本地备份
 ```
 
 ## 常见问题
 
-### Q: RESTIC_PASSWORD 未设置
-A: 必须设置此变量才能使用快照功能。设置方法见上文"配置"部分。
+### Q: 备份文件太大?
+A: 使用 `tar.xz` 压缩，或启用排除规则忽略 `node_modules` 等大目录。
 
-### Q: restic 仓库损坏
-A: 可以使用 `restic check --repo ~/.backup-tool/restic` 检查仓库完整性。
+### Q: 加密备份忘记密码?
+A: 无法恢复，请妥善保管密码。
 
-### Q: 上传失败
-A: 检查网络连接。Catbox 和 Tmpfiles 无需认证，Gofile 需要设置 `GOFILE_ACCOUNT_ID` 和 `GOFILE_TOKEN`。
+### Q: Restic 仓库损坏?
+A: 使用 `restic check --repo ~/.envault/restic` 检查。
+
+### Q: 上传到 Gofile 失败?
+A: 确保 `GOFILE_ACCOUNT_ID` 和 `GOFILE_TOKEN` 都已设置。
 
 ## License
 

@@ -1,0 +1,49 @@
+# EnVault Configuration Template
+# 备份配置模板
+
+# 要备份的目录列表
+backup_dirs:
+  - path: ~/.openclaw
+    name: openclaw
+  # 添加更多目录:
+  # - path: ~/projects/myapp
+  #   name: myapp
+  # - path: ~/documents
+  #   name: documents
+
+# 排除规则 (支持通配符: *.log, __pycache__, .git 等)
+exclude_patterns:
+  - "*.log"
+  - "*.tmp"
+  - "__pycache__"
+  - ".git"
+  - "node_modules"
+  - ".cache"
+  - ".DS_Store"
+  - "Thumbs.db"
+  - "*.bak"
+  - "*.swp"
+
+# 压缩格式: tar.gz, tar.bz2, tar.xz, zip
+compression: tar.gz
+
+# 加密设置
+encryption:
+  enabled: false
+  # recipient: your@email.com  # GPG recipient (非对称加密)
+  # 如留空则使用对称加密
+
+# 云存储上传 (true/false)
+cloud_upload:
+  catbox: true      # https://catbox.moe (无需认证)
+  tmpfiles: true    # https://tmpfiles.org (无需认证)
+  gofile: false     # https://gofile.io (需要 GOFILE_ACCOUNT_ID + GOFILE_TOKEN)
+  uguu: false       # https://uguu.se (无需认证)
+
+# Restic 增量快照设置
+restic:
+  enabled: true
+  keep_last: 10      # 保留最近 N 个快照
+
+# 语言: en, zh, es
+language: en

@@ -1,27 +1,27 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="backup-tool",
-    version="1.0.0",
-    description="DevEnv Backup Tool - 开发环境备份、快照、上传网盘一体化工具",
+    name="envault",
+    version="1.1.0",
+    description="EnVault - DevEnv Backup Tool with encryption, multi-directory, and multi-cloud support",
     author="savior-li",
-    author_email="savior@example.com",
+    author_email="savior@monkeycode.ai",
     url="https://github.com/savior-li/backup-tool",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     install_requires=[
         "requests>=2.25.0",
+        "pyyaml>=5.0",
     ],
     extras_require={
         "dev": [
             "pytest>=6.0",
             "black>=21.0",
-            "flake8>=3.9",
         ],
     },
     entry_points={
         "console_scripts": [
-            "backup-tool=backup_tool:main",
+            "envault=envault:main",
         ],
     },
     classifiers=[
@@ -34,6 +34,6 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
-    ),
+    ],
     python_requires=">=3.8",
 )
