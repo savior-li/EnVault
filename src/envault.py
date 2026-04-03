@@ -212,10 +212,7 @@ def create_backup_with_excludes(
     output_name: str = "backup"
 ) -> Optional[Path]:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_file = DEFAULT_BACKUP_DIR / f"{output_name}-{timestamp}.{compression.split('.')[0]}"
-
-    if compression == "zip":
-        backup_file = DEFAULT_BACKUP_DIR / f"{output_name}-{timestamp}.zip"
+    backup_file = DEFAULT_BACKUP_DIR / f"{output_name}-{timestamp}.{compression}"
 
     log(i18n("compression_format", compression))
 
