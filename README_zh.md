@@ -93,7 +93,7 @@ restic:
   enabled: true
   keep_last: 10
 
-language: en
+language: zh
 ```
 
 ## 环境变量
