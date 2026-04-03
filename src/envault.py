@@ -270,20 +270,23 @@ def create_backup_with_excludes(
 def encrypt_file(input_file: Path, recipient: str = None) -> Optional[Path]:
     output_file = input_file.with_suffix(input_file.suffix + ".gpg")
 
-    cmd = ["gpg", "--batch", "--yes", "--compress-algo", "none"]
+    cmd = ["gpg", "--batch", "--yes", "--compress-algo", "none", "--pinentry-mode", "loopback"]
 
     if recipient:
         cmd.extend(["--recipient", recipient])
     else:
         cmd.append("--symmetric")
 
-    cmd.extend(["--output", str(output_file), str(input_file)])
+    cmd.extend(["--passphrase-fd", "0", "--output", str(output_file), str(input_file)])
 
     try:
         env = os.environ.copy()
+        env["GPG_TTY"] = "/dev/tty"
         if os.environ.get("GPG_PASSWORD"):
-            env["GPG_PASSWORD"] = os.environ["GPG_PASSWORD"]
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            password = os.environ["GPG_PASSWORD"]
+            result = subprocess.run(cmd, input=password, capture_output=True, text=True, env=env)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         if result.returncode == 0:
             info(i18n("encryption_enabled"))
             input_file.unlink()
@@ -504,7 +507,6 @@ def create_restic_snapshot(source_dir: Path, description: str = "backup") -> boo
             ["restic", "backup", str(source_dir),
              "--repo", str(DEFAULT_RESTIC_REPO),
              "--tag", "envault",
-             "--description", description,
              "--quiet"],
             env=env,
             capture_output=True
