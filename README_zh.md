@@ -46,7 +46,9 @@ envault backup
 ## 文档
 
 - [快速开始](#快速开始)
-- [完整手册](MANUAL.md) - 包含配置详解、命令参考、高级功能、定时备份、故障排除
+- [完整手册](MANUAL_zh.md) - 包含配置详解、命令参考、高级功能、定时备份、故障排除
+- [English Manual](MANUAL_en.md)
+- [Manual en Español](MANUAL_es.md)
 
 ## 命令一览
 

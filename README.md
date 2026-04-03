@@ -1,68 +1,70 @@
 # EnVault
 
-**开发环境备份、快照、上传网盘一体化工具**
+**DevEnv Backup Tool - Snapshots and Cloud Upload**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![Bash](https://img.shields.io/badge/Bash-4.0+-green.svg)](https://www.gnu.org/software/bash/)
 
-解决开发环境/沙盒重启后数据丢失的痛点。
+Solve data loss after dev environment/sandbox restart.
 
-## 核心功能
+## Features
 
-- **多目录备份** - YAML 配置定义要备份的多个目录
-- **智能排除** - 自动忽略 `*.log`、`node_modules` 等
-- **备份加密** - GPG 对称/非对称加密
-- **多格式压缩** - tar.gz, tar.bz2, tar.xz, zip
-- **Restic 增量快照** - 节省存储空间
-- **多网盘上传** - Catbox, Tmpfiles, Gofile, Uguu
-- **多语言界面** - English, 中文, Español
+- **Multi-directory backup** - YAML config for multiple directories
+- **Smart exclusion** - Skip `*.log`, `node_modules`, etc.
+- **Backup encryption** - GPG symmetric/asymmetric
+- **Multiple formats** - tar.gz, tar.bz2, tar.xz, zip
+- **Restic snapshots** - Space-efficient versioning
+- **Multi-cloud upload** - Catbox, Tmpfiles, Gofile, Uguu
+- **Multi-language** - English, 中文, Español
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 1. 安装
+# 1. Install
 curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py -o ~/bin/envault
 chmod +x ~/bin/envault
 
-# 2. 初始化配置
+# 2. Initialize config
 envault init
 
-# 3. 编辑配置
+# 3. Edit config
 nano ~/.config/envault/config.yaml
 
-# 4. 执行备份
+# 4. Run backup
 envault backup
 ```
 
-## 支持平台
+## Supported Platforms
 
-| 平台 | 支持 |
-|------|------|
+| Platform | Support |
+|----------|---------|
 | Linux | ✅ |
 | macOS | ✅ |
 | Windows (WSL) | ✅ |
 
-## 文档
+## Documentation
 
-- [快速开始](#快速开始)
-- [完整手册](MANUAL.md) - 包含配置详解、命令参考、高级功能、定时备份、故障排除
+- [Quick Start](#quick-start)
+- [Full Manual](MANUAL_en.md) - Complete guide
+- [中文手册](MANUAL_zh.md)
+- [Manual en Español](MANUAL_es.md)
 
-## 命令一览
+## Commands
 
-| 命令 | 说明 |
-|------|------|
-| `envault backup` | 完整备份（使用配置） |
-| `envault backup /path` | 备份指定目录 |
-| `envault backup --encrypt` | 加密备份 |
-| `envault backup --format zip` | 指定压缩格式 |
-| `envault restore <file>` | 恢复备份 |
-| `envault list` | 查看 Restic 快照 |
-| `envault prune [n]` | 清理旧快照 |
-| `envault init` | 初始化配置 |
-| `envault config` | 查看配置 |
+| Command | Description |
+|---------|-------------|
+| `envault backup` | Full backup (uses config) |
+| `envault backup /path` | Backup specific directory |
+| `envault backup --encrypt` | Enable encryption |
+| `envault backup --format zip` | Specify compression |
+| `envault restore <file>` | Restore backup |
+| `envault list` | List Restic snapshots |
+| `envault prune [n]` | Keep last n snapshots |
+| `envault init` | Initialize config |
+| `envault config` | Show config |
 
-## 配置示例
+## Config Example
 
 ```yaml
 backup_dirs:
@@ -96,29 +98,29 @@ restic:
 language: en
 ```
 
-## 环境变量
+## Environment Variables
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `RESTIC_PASSWORD` | 快照用 | Restic 仓库密码 |
-| `GPG_PASSWORD` | 解密用 | GPG 解密密码 |
-| `GOFILE_ACCOUNT_ID` | Gofile 用 | Gofile 账户 ID |
-| `GOFILE_TOKEN` | Gofile 用 | Gofile API Token |
-| `ENVAULT_LANG` | 否 | 语言 (en/zh/es) |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RESTIC_PASSWORD` | For snapshots | Restic repo password |
+| `GPG_PASSWORD` | For decrypt | GPG decrypt password |
+| `GOFILE_ACCOUNT_ID` | For Gofile | Gofile account ID |
+| `GOFILE_TOKEN` | For Gofile | Gofile API token |
+| `ENVAULT_LANG` | No | Language (en/zh/es) |
 
-## 依赖
+## Dependencies
 
-| 依赖 | 必填 | 说明 |
-|------|------|------|
-| tar | 是 | 压缩工具 |
-| curl | 是 | HTTP 客户端 |
-| gpg | 加密用 | GPG 加密 |
-| restic | 快照用 | 增量备份 |
-| python3 | 推荐 | 运行 Python 版本 |
-| requests | Python版 | HTTP 库 |
-| pyyaml | Python版 | YAML 解析 |
+| Dependency | Required | Description |
+|------------|----------|-------------|
+| tar | Yes | Compression |
+| curl | Yes | HTTP client |
+| gpg | For encryption | GPG |
+| restic | For snapshots | Incremental backup |
+| python3 | Recommended | Run Python version |
+| requests | Python | HTTP library |
+| pyyaml | Python | YAML parsing |
 
-## 安装依赖
+## Install Dependencies
 
 ```bash
 # Ubuntu/Debian
@@ -127,11 +129,11 @@ apt install tar curl gpg restic
 # macOS
 brew install curl gpg restic
 
-# Python 依赖
+# Python deps
 pip install requests pyyaml
 ```
 
-## 多语言
+## Multi-language
 
 ```bash
 export ENVAULT_LANG=zh  # 中文
@@ -139,48 +141,48 @@ export ENVAULT_LANG=es  # Español
 export ENVAULT_LANG=en  # English
 ```
 
-## 常见问题
+## FAQ
 
 <details>
-<summary>Q: 如何设置定时备份？</summary>
+<summary>Q: How to set up scheduled backup?</summary>
 
-使用 cron：
+Use cron:
 
 ```bash
 crontab -e
-# 添加: 0 * * * * /path/to/envault backup
+# Add: 0 * * * * /path/to/envault backup
 ```
 
-或使用 Systemd Timer（见 MANUAL.md）
+Or Systemd Timer (see MANUAL.md)
 
 </details>
 
 <details>
-<summary>Q: 加密备份忘记密码怎么办？</summary>
+<summary>Q: Forgot password for encrypted backup?</summary>
 
-无法恢复，请妥善保管密码。建议使用非对称加密管理密钥。
+Cannot recover. Keep passwords safe. Use asymmetric encryption for team use.
 
 </details>
 
 <details>
-<summary>Q: 备份文件太大？</summary>
+<summary>Q: Backup file too large?</summary>
 
-1. 添加排除规则忽略 `node_modules`、`*.log` 等
-2. 使用更高压缩率：`compression: tar.xz`
+1. Add exclusion rules to skip `node_modules`, `*.log`, etc.
+2. Use higher compression: `compression: tar.xz`
 
 </details>
 
-## 存储结构
+## File Structure
 
 ```
 ~/.envault/
-├── restic/              # Restic 快照
-├── logs/                # 日志
-├── links-*.json        # 上传链接
-└── *.tar.gz            # 本地备份
+├── restic/              # Restic snapshots
+├── logs/                # Logs
+├── links-*.json        # Upload links
+└── *.tar.gz            # Local backups
 
 ~/.config/envault/
-└── config.yaml         # 配置文件
+└── config.yaml         # Config file
 ```
 
 ## License

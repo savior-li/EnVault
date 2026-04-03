@@ -46,7 +46,9 @@ envault backup
 ## Documentación
 
 - [Inicio Rápido](#inicio-rápido)
-- [Manual Completo](MANUAL.md) - Configuración detallada, referencia de comandos, funciones avanzadas
+- [Manual Completo](MANUAL_es.md) - Configuración detallada, referencia de comandos, funciones avanzadas
+- [English Manual](MANUAL_en.md)
+- [中文手册](MANUAL_zh.md)
 
 ## Comandos
 
