@@ -488,13 +488,13 @@ def encrypt_file_openssl(input_file: Path, password: str = None) -> Optional[Pat
         if result.returncode == 0:
             info(i18n("encryption_enabled"))
             input_file.unlink()
-            checksum = input_file.with_suffix(input_file.suffix + ".enc.sha256")
-            if checksum.exists():
-                checksum.unlink()
             return output_file
         else:
             error(f"Encryption failed: {result.stderr}")
             return None
+    except Exception as e:
+        error(f"Encryption error: {e}")
+        return None
     except Exception as e:
         error(f"Encryption error: {e}")
         return None
@@ -803,7 +803,6 @@ def create_restic_snapshot(source_dir: Path, description: str = "backup") -> boo
             ["restic", "backup", str(source_dir),
              "--repo", str(DEFAULT_RESTIC_REPO),
              "--tag", "envault",
-             "--description", description,
              "--quiet"],
             env=env,
             capture_output=True
