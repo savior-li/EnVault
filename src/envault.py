@@ -1069,7 +1069,7 @@ def main():
         config["encryption"]["enabled"] = True
         config["encryption"]["e2e"] = True
     if args.incremental:
-        config["incremental"]["enabled"] = True
+        config.setdefault("incremental", {})["enabled"] = True
 
     command = args.command or "help"
 
