@@ -22,7 +22,7 @@ Solve data loss after dev environment/sandbox restart.
 
 ```bash
 # 1. Install
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py -o ~/bin/envault
+curl -fsSL https://raw.githubusercontent.com/savior-li/EnVault/main/src/envault.py -o ~/bin/envault
 chmod +x ~/bin/envault
 
 # 2. Initialize config

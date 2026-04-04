@@ -67,7 +67,7 @@ EnVault is a development environment backup tool that solves:
 
 ```bash
 mkdir -p ~/bin
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py -o ~/bin/envault
+curl -fsSL https://raw.githubusercontent.com/savior-li/EnVault/main/src/envault.py -o ~/bin/envault
 chmod +x ~/bin/envault
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
@@ -76,7 +76,7 @@ source ~/.bashrc
 #### Method 2: Clone Repository
 
 ```bash
-git clone https://github.com/savior-li/backup-tool.git ~/envault
+git clone https://github.com/savior-li/EnVault.git ~/envault
 cd ~/envault
 ```
 

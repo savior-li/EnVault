@@ -22,7 +22,7 @@ Resuelve el problema de pérdida de datos después de reiniciar el entorno de de
 
 ```bash
 # 1. Instalar
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py -o ~/bin/envault
+curl -fsSL https://raw.githubusercontent.com/savior-li/EnVault/main/src/envault.py -o ~/bin/envault
 chmod +x ~/bin/envault
 
 # 2. Inicializar configuración

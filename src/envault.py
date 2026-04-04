@@ -177,6 +177,24 @@ def check_deps() -> bool:
     return True
 
 
+def validate_config(config: Dict[str, Any]) -> bool:
+    required_keys = ["backup_dirs", "exclude_patterns", "compression", "encryption", "cloud_upload"]
+    nested_keys = {
+        "encryption": ["enabled", "method"],
+        "cloud_upload": ["catbox", "tmpfiles", "gofile", "uguu"],
+    }
+    for key in required_keys:
+        if key not in config:
+            warn(f"Missing config key: {key}, using default")
+            config.setdefault(key, get_default_config().get(key, {}))
+    for section, keys in nested_keys.items():
+        if section in config:
+            for key in keys:
+                if key not in config[section]:
+                    config[section].setdefault(key, get_default_config()[section].get(key))
+    return True
+
+
 def init_dirs():
     DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -218,7 +236,7 @@ def get_default_config() -> Dict[str, Any]:
         "exclude_patterns": ["*.log", "*.tmp", "__pycache__", ".git", "node_modules", ".cache"],
         "compression": "tar.gz",
         "encryption": {"enabled": False, "method": "openssl", "key_file": str(DEFAULT_KEY_FILE), "e2e": False},
-        "cloud_upload": {"catbox": True, "tmpfiles": True, "gofile": False, "uguu": False},
+        "cloud_upload": {"catbox": False, "tmpfiles": False, "gofile": False, "uguu": False},
         "restic": {"enabled": True, "keep_last": 10},
         "cleanup": {"enabled": False, "keep_days": 7, "keep_count": 10},
         "incremental": {"enabled": False},
@@ -688,21 +706,22 @@ def full_backup(config: Dict[str, Any]) -> bool:
 
     cloud_config = config.get("cloud_upload", {})
     if backup_file.exists() and backup_file.stat().st_size < 200 * 1024 * 1024:
-        if cloud_config.get("catbox", True):
+        if cloud_config.get("catbox", False):
             if url := upload_catbox(backup_file):
                 links["files"]["catbox"] = url
-        if cloud_config.get("tmpfiles", True):
-            temp_file = backup_file.with_suffix(str(backup_file.suffix) + ".tgz")
-            shutil.copy2(backup_file, temp_file)
-            if url := upload_tmpfiles(temp_file):
+                info(f"Uploaded to Catbox: {url}")
+        if cloud_config.get("tmpfiles", False):
+            if url := upload_tmpfiles(backup_file):
                 links["files"]["tmpfiles"] = url
-            temp_file.unlink()
+                info(f"Uploaded to Tmpfiles: {url}")
         if cloud_config.get("gofile", False):
             if url := upload_gofile(backup_file):
                 links["files"]["gofile"] = url
+                info(f"Uploaded to Gofile: {url}")
         if cloud_config.get("uguu", False):
             if url := upload_uguu(backup_file):
                 links["files"]["uguu"] = url
+                info(f"Uploaded to Uguu: {url}")
 
     links_file = DEFAULT_BACKUP_DIR / f"links-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
     links_file.write_text(json.dumps(links, ensure_ascii=False, indent=2))
@@ -983,11 +1002,12 @@ function backup(){{fetch('/api/backup',{{method:'POST'}}).then(()=>location.relo
             self.end_headers()
 
 
-def start_dashboard(port: int = 8765):
+def start_dashboard(port: int = 8765, daemon: bool = False):
     os.chdir(DEFAULT_BACKUP_DIR)
     server = HTTPServer(("0.0.0.0", port), DashboardHandler)
     info(i18n("server_started", port))
-    threading.Thread(target=lambda: webbrowser.open(f"http://localhost:{port}"), daemon=True).start()
+    if not daemon:
+        threading.Thread(target=lambda: webbrowser.open(f"http://localhost:{port}"), daemon=True).start()
     server.serve_forever()
 
 
@@ -1013,6 +1033,7 @@ Commands:
     interactive        Interactive configuration
     config             Show config
     dashboard [port]   Start web dashboard (default: 8765)
+    dashboard [port] --daemon   Start in background
     verify <file>      Verify backup
     repair <file>      Repair backup data
     keygen             Generate encryption key
@@ -1051,6 +1072,8 @@ def main():
     parser.add_argument("--format")
     parser.add_argument("--lang")
     parser.add_argument("--name", dest="name")
+    parser.add_argument("--daemon", action="store_true")
+    parser.add_argument("--validate", action="store_true")
     args, _ = parser.parse_known_args()
 
     if args.lang:
@@ -1058,6 +1081,8 @@ def main():
         i18n = I18n(args.lang)
 
     config = load_config(args.config or DEFAULT_CONFIG_FILE)
+    if args.validate or args.command in ["backup", "restore", "cleanup"]:
+        validate_config(config)
 
     if args.format:
         config["compression"] = args.format
@@ -1135,7 +1160,7 @@ def main():
         interactive_config()
 
     elif command == "dashboard":
-        start_dashboard(int(args.arg1) if args.arg1 else 8765)
+        start_dashboard(int(args.arg1) if args.arg1 else 8765, daemon=args.daemon)
 
     elif command == "template":
         if args.arg1 == "save" and args.arg2:

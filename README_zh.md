@@ -22,7 +22,7 @@
 
 ```bash
 # 1. 安装
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py -o ~/bin/envault
+curl -fsSL https://raw.githubusercontent.com/savior-li/EnVault/main/src/envault.py -o ~/bin/envault
 chmod +x ~/bin/envault
 
 # 2. 初始化配置

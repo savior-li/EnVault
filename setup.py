@@ -6,7 +6,7 @@ setup(
     description="EnVault - DevEnv Backup Tool with encryption, multi-directory, and multi-cloud support",
     author="savior-li",
     author_email="savior@monkeycode.ai",
-    url="https://github.com/savior-li/backup-tool",
+    url="https://github.com/savior-li/EnVault",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     install_requires=[

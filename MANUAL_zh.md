@@ -70,7 +70,7 @@ EnVault 是一款开发环境备份工具，专门解决以下痛点：
 mkdir -p ~/bin
 
 # 下载 Python 版本
-curl -fsSL https://raw.githubusercontent.com/savior-li/backup-tool/main/src/envault.py \
+curl -fsSL https://raw.githubusercontent.com/savior-li/EnVault/main/src/envault.py \
   -o ~/bin/envault
 chmod +x ~/bin/envault
 
@@ -82,7 +82,7 @@ source ~/.bashrc
 #### 方式二：克隆仓库
 
 ```bash
-git clone https://github.com/savior-li/backup-tool.git ~/envault
+git clone https://github.com/savior-li/EnVault.git ~/envault
 cd ~/envault
 ```
 
